@@ -10,7 +10,7 @@ import re
 from dataclasses import *
 from enum import *
 import subprocess
-import filecmp
+import timeit
 
 def login(username, password):
     session = requests.Session()
@@ -36,8 +36,12 @@ def login(username, password):
     
 def parse_config(filename):
     config = configparser.ConfigParser()
-    config.read("config.ini")
+    config.read(filename)
     return config
+
+def save_config(config, filename):
+    with open(filename, 'w') as cf:
+        config.write(cf)
 
 class Problem:
     def __init__(self, code, session):
@@ -71,6 +75,15 @@ class Problem:
 
     def get_problem_directory(self, root_directory):
         return os.path.join(root_directory, self.code)
+    
+    def get_a_for_title(self, soup, title):
+        # Find all "input" elements headers. Then get the next siblings.
+        tr_input = []
+        for tr in soup.find_all('tr'):
+            th = tr.find('th')
+            if th and title in th.get_text():
+                tr_input.append(tr.find_next_sibling().find('a', class_='save'))
+        return tr_input
 
     def download_io(self, root_directory):
         problem_directory = self.get_problem_directory(root_directory)
@@ -81,26 +94,22 @@ class Problem:
                 self.clear_folder(problem_directory)
                 print('Cleared files in directory.')
             else:
-                print('Preserving existing files, exiting.')
+                print('Using existing files.')
                 return
         else:
             os.mkdir(problem_directory)
         
         response = self.session.get(self.get_io_url())
         soup = BeautifulSoup(response.content, 'html.parser')
-        a_elements = soup.find_all('a', class_='save')
-        for i, a in enumerate(a_elements):
-            if i % 3 == 2: continue
-            if i % 3 == 0:
-                # "input"
-                self.save("https://cses.fi" + a.get('href'),
-                          os.path.join(problem_directory, f"input_{i // 3 + 1}.txt"),
-                          True)
-            elif i % 3 == 1:
-                # "correct output"
-                self.save("https://cses.fi" + a.get('href'),
-                          os.path.join(problem_directory, f"expected_{i // 3 + 1}.txt"),
-                          True)
+
+        for i, a in enumerate(self.get_a_for_title(soup, 'input')):
+            self.save("https://cses.fi" + a.get('href'),
+                        os.path.join(problem_directory, f"input_{i + 1}.txt"),
+                        True)
+        for i, a in enumerate(self.get_a_for_title(soup, 'correct output')):
+            self.save("https://cses.fi" + a.get('href'),
+                        os.path.join(problem_directory, f"expected_{i + 1}.txt"),
+                        True)
     
     def get_io_pairs(self, root_directory):
         problem_directory = self.get_problem_directory(root_directory)
@@ -117,7 +126,7 @@ class Problem:
                 print('Found too many expected matches, ignoring:', expected_matches)
             results.append((i, infile, expected_matches[0]))
 
-        return sorted(results)
+        return sorted(results, key=lambda l: int(l[0]))
 
 class Status(Enum):
     SUCCESS = 0
@@ -132,12 +141,13 @@ class TerminalColors(Enum):
 class Result:
     i: int
     result: Status = Status.FAIL
+    time: float = 0
 
     def show(self):
         if self.result == Status.SUCCESS:
-            return (TerminalColors.CGREENBG + " [ ✔ ] " +  TerminalColors.CEND + f" Test {self.i}")
+            return TerminalColors.CGREENBG.value + " [ ✔ ] " +  TerminalColors.CEND.value + f" Test {self.i} | {str(round(self.time, 3))}s"
         elif self.result == Status.FAIL:
-            return TerminalColors.CREDBG + " [ ✘ ] " + TerminalColors.CEND + f"Test {self.i}"
+            return TerminalColors.CREDBG.value + " [ ✘ ] " + TerminalColors.CEND.value + f"Test {self.i} | {str(round(self.time, 3))}s"
 
 class Runner(ABC):
     def __init__(self) -> None:
@@ -164,21 +174,30 @@ class Runner(ABC):
         raise NotImplementedError("")
     
     def stats(self):
-        for stat in self.results:
-            print(stat.show())
+        print(f"{sum([1 if r.result == Status.SUCCESS else 0 for r in self.results])} / {len(self.results)} tests passed!")
+
+    def compare_ignoring_whitespace(self, file_1, file_2):
+        result = subprocess.run(f"diff -w {file_1} {file_2}", shell=True, capture_output=True, text=True)
+        return result.stdout.strip() == ""
     
 class OcamlRunner(Runner):
     def get_default_runfile_name(self, code):
         return code + '.ml'
 
     def compile_lang(self, runfile):
+        subprocess.run("eval $(opam env)", shell=True)
         subprocess.run("ocamlopt -o under_test " + runfile, shell=True)
 
-    def run(self, i, input_file, expected_file, runfile):
-        subprocess.run(f"./under_test < {input_file} > temp_file.txt")
-        # todo - timing etc.
-        status = Status.SUCCESS if filecmp.cmp('temp_file.txt', expected_file) else Status.FAIL
-        self.stats.append(Result(i, status))
+    def run(self, i, input_file, expected_file):
+        # todo - refactor this etc. so it's generic for all languages.
+        start = timeit.default_timer()
+        subprocess.run(f"./under_test < {input_file} > temp_file.txt", shell=True)
+        end = timeit.default_timer()
+        
+        status = Status.SUCCESS if self.compare_ignoring_whitespace('temp_file.txt', expected_file) else Status.FAIL
+        result = Result(i, status, end - start)
+        print(result.show())
+        self.results.append(result)
 
 class RunnerFactory:
     @staticmethod
@@ -192,15 +211,21 @@ def run():
     password = config.get('DEFAULT', 'password')
     directory = config.get('DEFAULT', 'directory')
     lang = config.get('DEFAULT', 'lang')
-    session = login(username, password)
+    default_code = config.get('DEFAULT', 'code') if config.has_option('DEFAULT', 'code') else 'no_default'
 
+    session = login(username, password)
     runner = RunnerFactory.create(lang)
 
-    code = input("Problem code: ").strip()
+    code = input(f"Problem code ({default_code}): ").strip()
+    if not code: code = default_code
+    # Save the code for next time to avoid typing
+    config.set('DEFAULT', 'code', code)
+    save_config(config, 'config.ini')
+
     problem = Problem(code, session)
     problem.download_io(directory)
 
-    tentative_filepath = os.path.join(directory, runner.get_default_runfile_name(code))
+    tentative_filepath = os.path.join(os.getcwd(), runner.get_default_runfile_name(code))
     runfile = input(f"Submit file ({tentative_filepath}): ").strip() or tentative_filepath
     runner.compile(runfile)
 
