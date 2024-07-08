@@ -7,6 +7,8 @@ To run:
 python3 test.py
 ```
 
+Make sure you have saved your username and password in `config.ini`.
+
 Enter the code of the question when prompted (e.g. for https://cses.fi/problemset/submit/1068/, enter 1068).
 
 ![image](https://github.com/septette/cses-ocaml/assets/127487141/8ee63b54-c1b3-41dc-802c-521da8a583a6)
