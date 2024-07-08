@@ -1,5 +1,5 @@
 
 *.cmi
 *.cmx
-*.ml
 *.o
+cses/*

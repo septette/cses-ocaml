@@ -143,6 +143,7 @@ class Result:
     result: Status = Status.FAIL
     time: float = 0
 
+    # TODO - refactor so results are not responsible for display/formatting
     def show(self):
         if self.result == Status.SUCCESS:
             return TerminalColors.CGREENBG.value + " [ ✔ ] " +  TerminalColors.CEND.value + f" Test {self.i} | {str(round(self.time, 3))}s"
@@ -153,6 +154,9 @@ class Runner(ABC):
     def __init__(self) -> None:
         super().__init__()
         self.results = []
+        # TODO - refactor, this is unnecessary state
+        self.compiled_location = None
+        self.compiled_filename = None
         
     def reset_stats(self):
         self.results = []
@@ -169,8 +173,19 @@ class Runner(ABC):
     def get_default_runfile_name(self, code):
         raise NotImplementedError("")
     
+    def run(self, i, input_file, expected_file):
+        start = timeit.default_timer()
+        output_file = self._run(i, input_file, expected_file)
+        end = timeit.default_timer()
+        
+        status = Status.SUCCESS if self.compare_ignoring_whitespace(output_file, expected_file) else Status.FAIL
+        result = Result(i, status, end - start)
+        print(result.show())
+        self.results.append(result)
+    
     @abstractmethod
-    def run(self, i, input_file, expected_file, runfile):
+    # should return the location of the output file
+    def _run(self, i, input_file, expected_file, runfile) -> str:
         raise NotImplementedError("")
     
     def stats(self):
@@ -187,31 +202,44 @@ class OcamlRunner(Runner):
     def compile_lang(self, runfile):
         subprocess.run("eval $(opam env)", shell=True)
         subprocess.run("ocamlopt -o under_test " + runfile, shell=True)
+        self.compiled_filename = 'under_test'
 
-    def run(self, i, input_file, expected_file):
-        # todo - refactor this etc. so it's generic for all languages.
-        start = timeit.default_timer()
-        subprocess.run(f"./under_test < {input_file} > temp_file.txt", shell=True)
-        end = timeit.default_timer()
-        
-        status = Status.SUCCESS if self.compare_ignoring_whitespace('temp_file.txt', expected_file) else Status.FAIL
-        result = Result(i, status, end - start)
-        print(result.show())
-        self.results.append(result)
+    def _run(self, i, input_file, expected_file):
+        subprocess.run(f"./{self.compiled_filename} < {input_file} > temp_file.txt", shell=True)
+        return 'temp_file.txt'
+
+class OcamlDuneRunner(Runner):
+    def get_default_runfile_name(self, code):
+        return f"cses_{code}.exe"
+
+    def compile_lang(self, runfile):
+        subprocess.run("eval $(opam env)", shell=True)
+        (dirname, filename) = os.path.split(runfile)
+        subprocess.run(f"cd {dirname} && dune build " + filename, shell=True)
+        self.compiled_location = dirname
+        self.compiled_filename = filename
+
+    def _run(self, i, input_file, expected_file):
+        # TODO - refactor, this is not very robust.
+        subprocess.run(f"cd {self.compiled_location} && dune exec -- ./{self.compiled_filename} < {input_file} > temp_file.txt", shell=True)
+        return os.path.join(self.compiled_location, 'temp_file.txt')
 
 class RunnerFactory:
     @staticmethod
     def create(lang):
         if lang == 'ocaml':
             return OcamlRunner()
+        elif lang == 'ocaml-dune':
+            return OcamlDuneRunner()
 
 def run():
     config = parse_config('config.ini')
     username = config.get('DEFAULT', 'username')
     password = config.get('DEFAULT', 'password')
-    directory = config.get('DEFAULT', 'directory')
+    directory = config.get('DEFAULT', 'save_directory')
     lang = config.get('DEFAULT', 'lang')
     default_code = config.get('DEFAULT', 'code') if config.has_option('DEFAULT', 'code') else 'no_default'
+    code_directory = config.get('DEFAULT', 'code_directory') if config.has_option('DEFAULT', 'code_directory') else os.getcwd()
 
     session = login(username, password)
     runner = RunnerFactory.create(lang)
@@ -225,7 +253,7 @@ def run():
     problem = Problem(code, session)
     problem.download_io(directory)
 
-    tentative_filepath = os.path.join(os.getcwd(), runner.get_default_runfile_name(code))
+    tentative_filepath = os.path.join(code_directory, runner.get_default_runfile_name(code))
     runfile = input(f"Submit file ({tentative_filepath}): ").strip() or tentative_filepath
     runner.compile(runfile)
 
