@@ -3,3 +3,4 @@
 *.cmx
 *.o
 cses/*
+config.ini

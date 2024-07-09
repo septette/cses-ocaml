@@ -215,12 +215,14 @@ class OcamlDuneRunner(Runner):
     def compile_lang(self, runfile):
         subprocess.run("eval $(opam env)", shell=True)
         (dirname, filename) = os.path.split(runfile)
-        subprocess.run(f"cd {dirname} && dune build " + filename, shell=True)
+        filename_stripped, _ = os.path.splitext(filename)
+        subprocess.run(f"cd {dirname} && echo '(executable (name {filename_stripped}) (libraries core))' > dune && dune build " + filename, shell=True)
         self.compiled_location = dirname
         self.compiled_filename = filename
 
     def _run(self, i, input_file, expected_file):
-        # TODO - refactor, this is not very robust.
+        # TODO - refactor, this is not very robust. Put the temp files in some temporary folder and stop passing all the filenames around.
+        # Maybe have some kind of struct representing inputs, outputs, intermediate locations etc.
         subprocess.run(f"cd {self.compiled_location} && dune exec -- ./{self.compiled_filename} < {input_file} > temp_file.txt", shell=True)
         return os.path.join(self.compiled_location, 'temp_file.txt')
 
