@@ -1,6 +1,9 @@
-
+# Ignore
 *.cmi
 *.cmx
 *.o
 cses/*
 config.ini
+
+# Allow
+!cses/*.ml
