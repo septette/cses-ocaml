@@ -216,7 +216,7 @@ class OcamlDuneRunner(Runner):
         subprocess.run("eval $(opam env)", shell=True)
         (dirname, filename) = os.path.split(runfile)
         filename_stripped, _ = os.path.splitext(filename)
-        subprocess.run(f"cd {dirname} && echo '(executable (name {filename_stripped}) (libraries core))' > dune && dune build " + filename, shell=True)
+        subprocess.run(f"cd {dirname} && echo '(executable (name {filename_stripped}) (libraries core) (preprocess (pps ppx_sexp_conv)))' > dune && dune build " + filename, shell=True)
         self.compiled_location = dirname
         self.compiled_filename = filename
 
